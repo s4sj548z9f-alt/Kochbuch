@@ -91,6 +91,71 @@ function leseZahl(text) {
 }
 function vergleich(a, b) { return a.localeCompare(b, 'de', { sensitivity: 'base' }); }
 
+// ---------- Naehrwerte ----------
+
+const QUELLE_BLS = 'Nährwerte: Bundeslebensmittelschlüssel (BLS) 4.0, Max Rubner-Institut, Lizenz CC BY 4.0';
+let blsDaten = null;
+
+// Kleinbuchstaben, ohne Akzente/Umlaut-Punkte, ß -> ss: "Möhre" findet auch "mohre".
+function normal(text) {
+  return String(text || '').toLowerCase().replace(/ß/g, 'ss').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+// Laedt die kompakte BLS-Liste einmal pro Sitzung (danach aus dem Speicher).
+async function ladeBLS() {
+  if (blsDaten) return blsDaten;
+  const antwort = await fetch('daten/bls-naehrwerte.json');
+  if (!antwort.ok) throw new Error('BLS-Datei: ' + antwort.status);
+  const json = await antwort.json();
+  blsDaten = json.daten.map(([code, name, kcal, eiweiss, fett, kh]) =>
+    ({ code, name, suche: normal(name), werte: { kcal, eiweiss, fett, kh } }));
+  return blsDaten;
+}
+
+// Alle eingegebenen Woerter muessen im Namen vorkommen. Treffer, die mit dem ersten Wort beginnen, zuerst.
+function sucheBLS(daten, text) {
+  const woerter = normal(text).split(/\s+/).filter(Boolean);
+  if (woerter.join('').length < 3) return [];
+  return daten
+    .filter(d => woerter.every(w => d.suche.includes(w)))
+    .sort((a, b) => (Number(b.suche.startsWith(woerter[0])) - Number(a.suche.startsWith(woerter[0]))) || a.name.length - b.name.length)
+    .slice(0, 25);
+}
+
+// Bei g, kg, ml, l wird das Gewicht aus der Menge berechnet (ml wie g). Sonst gilt das eingetragene Gewicht.
+function einheitAutomatisch(einheit) {
+  return ['g', 'kg', 'ml', 'l'].includes((einheit || '').trim().toLowerCase());
+}
+function grammFuer(z) {
+  if (!(typeof z.menge === 'number' && z.menge > 0)) return null;
+  const e = (z.einheit || '').trim().toLowerCase();
+  if (e === 'g' || e === 'ml') return z.menge;
+  if (e === 'kg' || e === 'l') return z.menge * 1000;
+  return typeof z.gramm === 'number' && z.gramm > 0 ? z.gramm : null;
+}
+function fehlenNaehrwerte(z) {
+  if (!(typeof z.menge === 'number' && z.menge > 0)) return '';
+  if (!z.werte100g) return 'Keine Nährwerte';
+  if (!grammFuer(z)) return 'Gewicht fehlt';
+  return '';
+}
+// Summe fuer das ganze Rezept in der gespeicherten Grundmenge.
+function berechneNaehrwerte(zutaten) {
+  const summe = { kcal: 0, eiweiss: 0, fett: 0, kh: 0 };
+  const fehlend = [];
+  for (const z of zutaten) {
+    if (!(typeof z.menge === 'number' && z.menge > 0)) continue; // z. B. "Salz nach Geschmack"
+    if (fehlenNaehrwerte(z)) { fehlend.push(z.name || 'ohne Namen'); continue; }
+    const g = grammFuer(z);
+    for (const k of Object.keys(summe)) summe[k] += (Number(z.werte100g[k]) || 0) * g / 100;
+  }
+  return { summe, fehlend };
+}
+function nwText(wert, einheit) {
+  if (einheit === 'kcal') return `${Math.round(wert)} kcal`;
+  return `${zahl(wert, wert < 10 ? 0.1 : 1)} g`;
+}
+
 // ---------- Daten ----------
 
 async function ladeRezepte() {
@@ -263,6 +328,29 @@ function ansichtRezept(id) {
   const zutaten = r.zutaten || [];
   const schritte = r.schritte || [];
   const s = { faktor: 1, basisText: '', auswahl: -1, eingabe: '', erledigt: new Set() };
+  const nw = berechneNaehrwerte(zutaten);
+
+  function naehrwertAbschnitt(f) {
+    if (!zutaten.some(z => typeof z.menge === 'number' && z.menge > 0)) return null;
+    const zeilen = [['Energie', 'kcal', 'kcal'], ['Eiweiß', 'eiweiss', 'g'], ['Fett', 'fett', 'g'], ['Kohlenhydrate', 'kh', 'g']];
+    const anzahl = nw.fehlend.length;
+    return el('section', { class: 'abschnitt' },
+      el('h2', { text: 'Nährwerte' }),
+      anzahl ? el('p', { class: 'warnung', role: 'status',
+        text: `Unvollständig: ${anzahl === 1 ? '1 Zutat' : anzahl + ' Zutaten'} ohne Nährwerte oder Gewicht (${nw.fehlend.join(', ')}).` }) : null,
+      el('div', { class: 'box nw-tabelle' },
+        el('span', { class: 'kopfzeile' }),
+        el('span', { class: 'kopfzeile rechts', text: 'pro Portion' }),
+        el('span', { class: 'kopfzeile rechts', text: 'gesamt' }),
+        ...zeilen.flatMap(([name, k, einheit]) => [
+          el('strong', { text: name }),
+          el('span', { class: 'rechts', text: nwText(nw.summe[k] / basisPortionen, einheit) }),
+          el('span', { class: 'rechts', text: nwText(nw.summe[k] * f, einheit) })
+        ])
+      ),
+      el('p', { class: 'quelle' }, el('a', { href: 'https://blsdb.de/', target: '_blank', rel: 'noopener', text: QUELLE_BLS }))
+    );
+  }
 
   function neuZeichnen() {
     const f = s.faktor;
@@ -285,7 +373,10 @@ function ansichtRezept(id) {
               }
             })
           : el('span', { class: 'menge-leer' }),
-        el('span', { class: 'zutat-name', text: z.name || '' })
+        el('div', { class: 'zutat-name' },
+          el('span', { text: z.name || '' }),
+          fehlenNaehrwerte(z) ? el('span', { class: 'badge', text: fehlenNaehrwerte(z) }) : null
+        )
       );
       let umrechner = null;
       if (offen) {
@@ -362,6 +453,7 @@ function ansichtRezept(id) {
         el('p', { class: 'hinweis', text: 'Tippe auf eine Menge, um das Rezept nach dieser Zutat umzurechnen.' }),
         zutatenListe
       ) : null,
+      naehrwertAbschnitt(f),
       schritte.length ? el('section', { class: 'abschnitt' },
         el('h2', { text: 'Zubereitung' }),
         el('p', { class: 'hinweis', text: 'Tippe auf einen Schritt, wenn er erledigt ist.' }),
@@ -389,11 +481,17 @@ function ansichtBearbeiten(id) {
     kategorie: vorhanden?.kategorie || '',
     portionen: vorhanden?.portionen ? String(vorhanden.portionen).replace('.', ',') : '4',
     zeitMin: vorhanden?.zeitMin ? String(vorhanden.zeitMin) : '',
-    zutaten: (vorhanden?.zutaten || []).map(z => ({ ...z, mengeText: z.menge === null || z.menge === undefined ? '' : String(z.menge).replace('.', ',') })),
+    zutaten: (vorhanden?.zutaten || []).map(z => ({
+      ...z,
+      mengeText: z.menge === null || z.menge === undefined ? '' : String(z.menge).replace('.', ','),
+      grammText: !einheitAutomatisch(z.einheit) && typeof z.gramm === 'number' ? String(z.gramm).replace('.', ',') : '',
+      panel: null
+    })),
     schritte: [...(vorhanden?.schritte || [])],
     notizen: vorhanden?.notizen || ''
   };
-  if (e.zutaten.length === 0) e.zutaten.push({ mengeText: '', einheit: '', name: '' });
+  const leereZutat = () => ({ mengeText: '', einheit: '', name: '', grammText: '', panel: null });
+  if (e.zutaten.length === 0) e.zutaten.push(leereZutat());
   if (e.schritte.length === 0) e.schritte.push('');
 
   const kategorien = [...new Set((zustand.rezepte || []).map(r => (r.kategorie || '').trim()).filter(Boolean))].sort(vergleich);
@@ -403,17 +501,116 @@ function ansichtBearbeiten(id) {
     return el('div', { class: 'feld' }, el('label', { for: idName, text: label }), input);
   }
 
-  function neuZeichnen() {
-    const zutatenForm = e.zutaten.map((z, i) => el('div', { class: 'zutat-form' },
+  function setzeWerte(z, werte, bls) {
+    z.werte100g = werte;
+    z.blsCode = bls ? bls.code : null;
+    z.blsName = bls ? bls.name : null;
+    z.eigeneWerte = !!werte && !bls;
+    z.panel = null;
+    neuZeichnen();
+  }
+
+  function blsPanel(z, i) {
+    const ergebnis = el('div', { class: 'treffer' }, el('p', { class: 'hinweis', text: 'Lädt …' }));
+    const feld = el('input', { id: `bls${i}`, type: 'search', placeholder: 'z. B. Kartoffel roh', value: z.suchtext ?? z.name ?? '' });
+    async function aktualisieren() {
+      const text = feld.value;
+      z.suchtext = text;
+      let daten;
+      try { daten = await ladeBLS(); } catch (f) {
+        console.error(f);
+        ergebnis.replaceChildren(el('p', { class: 'fehler', text: 'Die Nährwertliste konnte nicht geladen werden.' }));
+        return;
+      }
+      if (feld.value !== text) return; // inzwischen weitergetippt
+      if (normal(text).replace(/\s/g, '').length < 3) {
+        ergebnis.replaceChildren(el('p', { class: 'hinweis', text: 'Mindestens 3 Buchstaben eingeben.' }));
+        return;
+      }
+      const liste = sucheBLS(daten, text);
+      if (!liste.length) {
+        ergebnis.replaceChildren(el('p', { class: 'hinweis', text: 'Nichts gefunden. Ein kürzeres Wort versuchen, z. B. nur „Kartoffel“.' }));
+        return;
+      }
+      ergebnis.replaceChildren(...liste.map(d => el('button', {
+        class: 'treffer-zeile', type: 'button', onclick: () => setzeWerte(z, { ...d.werte }, d)
+      }, el('span', { text: d.name }), el('span', { class: 'hinweis', text: `${d.werte.kcal} kcal` }))));
+    }
+    feld.addEventListener('input', aktualisieren);
+    setTimeout(() => { aktualisieren(); feld.focus(); }, 0);
+    return el('div', { class: 'umrechner' },
+      el('label', { for: `bls${i}`, class: 'label', text: 'Im BLS suchen' }),
+      feld,
+      el('p', { class: 'hinweis', text: 'Werte pro 100 g. Wiegst du roh ab, einen Eintrag mit „roh“ wählen.' }),
+      ergebnis,
+      el('button', { class: 'textknopf', type: 'button', style: 'align-self:flex-start', text: 'Abbrechen',
+        onclick: () => { z.panel = null; neuZeichnen(); } })
+    );
+  }
+
+  function eigenPanel(z, i) {
+    const w = z.werte100g || {};
+    const fehler = el('p', { class: 'fehler', role: 'alert' });
+    const felder = [['kcal', 'Energie (kcal)'], ['eiweiss', 'Eiweiß (g)'], ['fett', 'Fett (g)'], ['kh', 'Kohlenhydrate (g)']]
+      .map(([k, label]) => ({ k, label, input: el('input', {
+        id: `eigen${i}${k}`, type: 'text', inputmode: 'decimal',
+        value: w[k] === null || w[k] === undefined ? '' : String(w[k]).replace('.', ',')
+      }) }));
+    return el('div', { class: 'umrechner' },
+      el('span', { class: 'label', text: 'Eigene Nährwerte pro 100 g' }),
+      el('p', { class: 'hinweis', text: 'Zum Beispiel von der Verpackung.' }),
+      el('div', { class: 'zwei' }, ...felder.map(f => el('div', { class: 'feld' },
+        el('label', { for: f.input.id, text: f.label }), f.input))),
+      fehler,
+      el('div', { class: 'umrechner-zeile' },
+        el('button', { class: 'textknopf', type: 'button', text: 'Abbrechen', onclick: () => { z.panel = null; neuZeichnen(); } }),
+        el('button', { class: 'knopf haupt', type: 'button', text: 'Übernehmen', onclick: () => {
+          const werte = {};
+          for (const f of felder) {
+            const v = leseZahl(f.input.value);
+            if (v === null || Number.isNaN(v)) { fehler.textContent = `Bitte bei „${f.label}“ eine Zahl eingeben.`; f.input.focus(); return; }
+            werte[f.k] = v;
+          }
+          setzeWerte(z, werte, null);
+        } })
+      )
+    );
+  }
+
+  function zutatKarte(z, i) {
+    const versteckt = () => einheitAutomatisch(z.einheit) || !String(z.mengeText || '').trim();
+    const gewicht = el('div', { class: 'feld', hidden: versteckt() },
+      el('label', { for: `gramm${i}`, text: 'Gewicht der ganzen Menge in g' }),
+      el('input', { id: `gramm${i}`, type: 'text', inputmode: 'decimal', placeholder: 'z. B. 80', value: z.grammText,
+        oninput: (ev) => { z.grammText = ev.target.value; } })
+    );
+    const eingaben = el('div', { class: 'zutat-form' },
       el('input', { type: 'text', inputmode: 'decimal', 'aria-label': `Menge Zutat ${i + 1}`, placeholder: 'Menge', value: z.mengeText,
-        oninput: (ev) => { z.mengeText = ev.target.value; } }),
+        oninput: (ev) => { z.mengeText = ev.target.value; gewicht.hidden = versteckt(); } }),
       el('input', { type: 'text', 'aria-label': `Einheit Zutat ${i + 1}`, placeholder: 'g', value: z.einheit || '',
-        oninput: (ev) => { z.einheit = ev.target.value; } }),
+        oninput: (ev) => { z.einheit = ev.target.value; gewicht.hidden = versteckt(); } }),
       el('input', { type: 'text', 'aria-label': `Name Zutat ${i + 1}`, placeholder: 'Zutat', value: z.name || '',
         oninput: (ev) => { z.name = ev.target.value; } }),
       el('button', { class: 'iconknopf entfernen', type: 'button', 'aria-label': `Zutat ${i + 1} entfernen`,
         onclick: () => { e.zutaten.splice(i, 1); neuZeichnen(); } }, icon('x'))
-    ));
+    );
+    const status = z.werte100g
+      ? el('div', { class: 'status' },
+          el('span', { class: 'status-text',
+            text: z.eigeneWerte ? `Eigene Werte: ${z.werte100g.kcal} kcal pro 100 g` : `BLS: ${z.blsName || z.blsCode} (${z.werte100g.kcal} kcal pro 100 g)` }),
+          el('button', { class: 'textknopf', type: 'button', text: 'Ändern',
+            onclick: () => { z.panel = z.eigeneWerte ? 'eigen' : 'suche'; neuZeichnen(); } }),
+          el('button', { class: 'textknopf', type: 'button', text: 'Entfernen', onclick: () => setzeWerte(z, null, null) }))
+      : el('div', { class: 'status' },
+          el('span', { class: 'badge', text: 'Keine Nährwerte' }),
+          el('button', { class: 'textknopf', type: 'button', text: 'Im BLS suchen', onclick: () => { z.panel = 'suche'; neuZeichnen(); } }),
+          el('button', { class: 'textknopf', type: 'button', text: 'Eigene Werte', onclick: () => { z.panel = 'eigen'; neuZeichnen(); } }));
+    const panel = z.panel === 'suche' ? blsPanel(z, i) : z.panel === 'eigen' ? eigenPanel(z, i) : null;
+    return el('div', { class: 'zutat-karte' }, eingaben, gewicht, status, panel);
+  }
+
+  function neuZeichnen() {
+    const zutatenForm = e.zutaten.map((z, i) => zutatKarte(z, i));
 
     const schritteForm = e.schritte.map((text, i) => el('div', { class: 'schritt-form' },
       el('span', { class: 'schritt-nr', text: String(i + 1) }),
@@ -438,9 +635,9 @@ function ansichtBearbeiten(id) {
       ),
       el('section', { class: 'abschnitt' },
         el('h2', { text: 'Zutaten' }),
-        el('p', { class: 'hinweis', text: 'Menge leer lassen bei „Salz nach Geschmack“. Komma oder Punkt sind erlaubt.' }),
+        el('p', { class: 'hinweis', text: 'Menge leer lassen bei „Salz nach Geschmack“. Bei g, kg, ml und l rechnet die App das Gewicht selbst (1 ml = 1 g), sonst bitte das Gewicht eintragen.' }),
         ...zutatenForm,
-        el('button', { class: 'knopf gestrichelt', type: 'button', onclick: () => { e.zutaten.push({ mengeText: '', einheit: '', name: '' }); neuZeichnen(); } },
+        el('button', { class: 'knopf gestrichelt', type: 'button', onclick: () => { e.zutaten.push(leereZutat()); neuZeichnen(); } },
           icon('plus'), 'Zutat hinzufügen')
       ),
       el('section', { class: 'abschnitt' },
@@ -475,15 +672,27 @@ function ansichtBearbeiten(id) {
       if (!name && menge === null && !(z.einheit || '').trim()) continue; // leere Zeile
       if (!name) { meldung.textContent = `Zutat ${i + 1}: Bitte einen Namen eingeben.`; return; }
       if (Number.isNaN(menge)) { meldung.textContent = `Zutat ${i + 1}: Die Menge ist keine Zahl.`; return; }
-      const { mengeText, ...rest } = z;
+      const { mengeText, grammText, panel, suchtext, ...rest } = z;
+      const einheit = (z.einheit || '').trim();
+      let gramm = null;
+      if (menge > 0) {
+        if (einheitAutomatisch(einheit)) gramm = grammFuer({ menge, einheit });
+        else {
+          const g = leseZahl(grammText);
+          if (Number.isNaN(g)) { meldung.textContent = `Zutat ${i + 1}: Das Gewicht ist keine Zahl.`; return; }
+          gramm = g > 0 ? g : null;
+        }
+      }
       zutaten.push({
         ...rest,
         menge,
-        einheit: (z.einheit || '').trim(),
+        einheit,
         name,
-        gramm: rest.gramm ?? null,
+        gramm,
         blsCode: rest.blsCode ?? null,
-        werte100g: rest.werte100g ?? null
+        blsName: rest.blsName ?? null,
+        werte100g: rest.werte100g ?? null,
+        eigeneWerte: !!rest.eigeneWerte
       });
     }
 
