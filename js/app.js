@@ -6,9 +6,20 @@ import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  getFirestore, collection, getDocs, getDoc, doc, addDoc, updateDoc, deleteDoc, serverTimestamp
+  getFirestore, collection, getDocs, getDoc, doc, addDoc, setDoc, updateDoc, deleteDoc, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
+
+// Darstellung (hell/dunkel/automatisch) gilt nur fuer dieses Geraet.
+function leseDarstellung() {
+  try { return localStorage.getItem('darstellung') || 'auto'; } catch { return 'auto'; }
+}
+function setzeDarstellung(wert) {
+  try { localStorage.setItem('darstellung', wert); } catch { /* privater Modus: nur fuer diese Sitzung */ }
+  if (wert === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', wert);
+}
+setzeDarstellung(leseDarstellung());
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -52,7 +63,10 @@ const ICONS = {
   minus: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>',
   suche: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
   stift: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg>',
-  x: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+  x: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  zahnrad: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  download: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>',
+  muell: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>'
 };
 function icon(name) {
   const t = document.createElement('template');
@@ -318,7 +332,7 @@ async function ansichtListe() {
     el('div', { class: 'seite' },
       el('div', { class: 'leiste' },
         el('h1', { text: 'Rezepte' }),
-        el('button', { class: 'textknopf', type: 'button', text: 'Abmelden', onclick: () => signOut(auth) })
+        el('a', { class: 'iconknopf', href: '#/einstellungen', 'aria-label': 'Einstellungen' }, icon('zahnrad'))
       ),
       el('label', { for: 'suche', class: 'label', style: 'position:absolute;left:-9999px', text: 'Suche' }),
       el('div', { class: 'suche' }, icon('suche'), suchfeld),
@@ -851,6 +865,164 @@ function ansichtVarianteAnlegen(id) {
   setTimeout(() => name.focus(), 0);
 }
 
+// ---------- Einstellungen ----------
+
+function speichereDatei(name, inhalt, typ) {
+  const url = URL.createObjectURL(new Blob([inhalt], { type: typ }));
+  const a = el('a', { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+function datumHeute() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// Firestore-Zeitstempel als lesbares Datum, alles andere unveraendert.
+function fuerExport(wert) {
+  if (wert && typeof wert.toDate === 'function') return wert.toDate().toISOString();
+  if (wert instanceof Date) return wert.toISOString();
+  if (Array.isArray(wert)) return wert.map(fuerExport);
+  if (wert && typeof wert === 'object') return Object.fromEntries(Object.entries(wert).map(([k, v]) => [k, fuerExport(v)]));
+  return wert;
+}
+function exportJSON(rezepte) {
+  const daten = { exportiertAm: new Date().toISOString(), anzahl: rezepte.length, quelleNaehrwerte: QUELLE_BLS, rezepte: rezepte.map(fuerExport) };
+  speichereDatei(`kochbuch-${datumHeute()}.json`, JSON.stringify(daten, null, 2), 'application/json');
+}
+// CSV fuer deutsches Excel: Semikolon, Dezimalkomma, UTF-8 mit BOM. Eine Zeile pro Zutat.
+function exportCSV(rezepte) {
+  const feld = (v) => {
+    if (v === null || v === undefined) return '';
+    const t = typeof v === 'number' ? String(Math.round(v * 100) / 100).replace('.', ',') : String(v);
+    return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const kopf = ['Rezept', 'Variante', 'Kategorie', 'Portionen', 'Zeit (Min)', 'Zutat', 'Menge', 'Einheit', 'Gewicht (g)',
+    'BLS-Code', 'BLS-Name', 'kcal pro 100 g', 'Eiweiß pro 100 g', 'Fett pro 100 g', 'Kohlenhydrate pro 100 g'];
+  const zeilen = [kopf];
+  for (const r of rezepte) {
+    const basis = [r.titel, r.variantenName, r.kategorie, r.portionen, r.zeitMin];
+    const zutaten = r.zutaten && r.zutaten.length ? r.zutaten : [{}];
+    for (const z of zutaten) {
+      const w = z.werte100g || {};
+      zeilen.push([...basis, z.name, z.menge, z.einheit, grammFuer(z), z.blsCode, z.blsName || (z.eigeneWerte ? 'eigene Werte' : ''),
+        w.kcal, w.eiweiss, w.fett, w.kh]);
+    }
+  }
+  const text = '﻿' + zeilen.map(z => z.map(feld).join(';')).join('\r\n');
+  speichereDatei(`kochbuch-${datumHeute()}.csv`, text, 'text/csv;charset=utf-8');
+}
+
+async function ansichtEinstellungen() {
+  const istBesitzer = zustand.freigabe && zustand.freigabe.rolle === 'besitzer';
+  const meldungExport = el('p', { class: 'hinweis', role: 'status' });
+
+  async function exportieren(art) {
+    meldungExport.textContent = 'Wird vorbereitet …';
+    try {
+      zustand.rezepte = null; // frisch laden, damit die Sicherung aktuell ist
+      const rezepte = await ladeRezepte();
+      art === 'json' ? exportJSON(rezepte) : exportCSV(rezepte);
+      meldungExport.textContent = rezepte.length === 1 ? '1 Rezept exportiert.' : `${rezepte.length} Rezepte exportiert.`;
+    } catch (f) {
+      console.error(f);
+      meldungExport.textContent = 'Export fehlgeschlagen. Bitte Internetverbindung prüfen.';
+    }
+  }
+
+  const darstellung = leseDarstellung();
+  const auswahl = el('div', { class: 'segment', role: 'group', 'aria-label': 'Darstellung' },
+    ...[['hell', 'Hell'], ['dunkel', 'Dunkel'], ['auto', 'Wie Gerät']].map(([wert, text]) => el('button', {
+      type: 'button', text, 'aria-pressed': String(darstellung === wert),
+      onclick: (ev) => {
+        setzeDarstellung(wert);
+        for (const knopf of auswahl.children) knopf.setAttribute('aria-pressed', String(knopf === ev.currentTarget));
+      }
+    }))
+  );
+
+  const zugaenge = el('div', { class: 'abschnitt' });
+  async function baueZugaenge() {
+    zugaenge.replaceChildren(el('p', { class: 'hinweis', text: 'Lädt …' }));
+    let personen;
+    try {
+      const snap = await getDocs(collection(db, 'erlaubteNutzer'));
+      personen = snap.docs.map(d => ({ mail: d.id, rolle: d.data().rolle || 'familie' }))
+        .sort((a, b) => (a.rolle === 'besitzer' ? -1 : b.rolle === 'besitzer' ? 1 : vergleich(a.mail, b.mail)));
+    } catch (f) {
+      console.error(f);
+      zugaenge.replaceChildren(el('p', { class: 'fehler', text: 'Die Freigaben konnten nicht geladen werden.' }));
+      return;
+    }
+    const fehler = el('p', { class: 'fehler', role: 'alert' });
+    const neu = el('input', { id: 'neueMail', type: 'email', placeholder: 'name@beispiel.de', autocomplete: 'off' });
+    const eigene = (zustand.nutzer.email || '').toLowerCase();
+    zugaenge.replaceChildren(
+      el('div', { class: 'box zutaten' }, ...personen.map(pers => el('div', { class: 'person' },
+        el('div', { class: 'karte-text' },
+          el('span', { class: 'person-mail', text: pers.mail }),
+          el('span', { class: 'hinweis', text: pers.rolle === 'besitzer' ? 'Besitzer' : 'Familie' })
+        ),
+        pers.rolle !== 'besitzer' && pers.mail !== eigene
+          ? el('button', { class: 'iconknopf entfernen', type: 'button', 'aria-label': `Freigabe für ${pers.mail} entfernen`,
+              onclick: async () => {
+                if (!confirm(`Freigabe für ${pers.mail} entfernen? Die Person kann die App danach nicht mehr nutzen.`)) return;
+                try { await deleteDoc(doc(db, 'erlaubteNutzer', pers.mail)); baueZugaenge(); }
+                catch (f) { console.error(f); fehler.textContent = 'Entfernen fehlgeschlagen.'; }
+              } }, icon('muell'))
+          : null
+      ))),
+      el('form', { class: 'abschnitt', onsubmit: async (ev) => {
+        ev.preventDefault();
+        fehler.textContent = '';
+        const mail = neu.value.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) { fehler.textContent = 'Bitte eine gültige E-Mail-Adresse eingeben.'; return; }
+        if (personen.some(pers => pers.mail === mail)) { fehler.textContent = 'Diese Adresse ist schon freigegeben.'; return; }
+        try {
+          await setDoc(doc(db, 'erlaubteNutzer', mail), { rolle: 'familie', freigegebenAm: serverTimestamp() });
+          baueZugaenge();
+        } catch (f) { console.error(f); fehler.textContent = 'Freigeben fehlgeschlagen.'; }
+      } },
+        el('label', { for: 'neueMail', class: 'label', text: 'E-Mail-Adresse freigeben' }),
+        el('div', { class: 'umrechner-zeile' }, neu, el('button', { class: 'knopf haupt', type: 'submit', text: 'Freigeben' })),
+        fehler,
+        el('p', { class: 'hinweis', text: 'Danach in der Firebase-Konsole unter Authentication ein Konto mit dieser Adresse anlegen und das Startpasswort weitergeben.' })
+      )
+    );
+  }
+
+  zeige(el('div', { class: 'seite' },
+    el('div', { class: 'leiste' }, el('a', { class: 'zurueck', href: '#/' }, icon('zurueck'), 'Rezepte')),
+    el('h1', { text: 'Einstellungen' }),
+    el('section', { class: 'abschnitt' },
+      el('h2', { text: 'Darstellung' }),
+      auswahl,
+      el('p', { class: 'hinweis', text: 'Gilt nur für dieses Gerät.' })
+    ),
+    el('section', { class: 'abschnitt' },
+      el('h2', { text: 'Sicherung' }),
+      el('div', { class: 'box aktionen' },
+        el('p', { class: 'hinweis', text: 'Lädt alle Rezepte und Varianten als Datei auf dieses Gerät. Die JSON-Datei ist die vollständige Sicherung, die CSV-Datei enthält eine Zeile pro Zutat zum Öffnen in Excel.' }),
+        el('button', { class: 'knopf haupt', type: 'button', onclick: () => exportieren('json') }, icon('download'), 'Alle Rezepte herunterladen (JSON)'),
+        el('button', { class: 'knopf', type: 'button', onclick: () => exportieren('csv') }, 'Als CSV für Excel'),
+        meldungExport
+      )
+    ),
+    istBesitzer ? el('section', { class: 'abschnitt' },
+      el('div', { class: 'leiste' }, el('h2', { text: 'Zugänge verwalten' }), el('span', { class: 'hinweis', text: 'nur für dich' })),
+      zugaenge
+    ) : null,
+    el('section', { class: 'abschnitt' },
+      el('h2', { text: 'Konto' }),
+      el('p', { class: 'hinweis', text: `Angemeldet als ${zustand.nutzer.email}` }),
+      el('button', { class: 'knopf', type: 'button', text: 'Abmelden', onclick: () => signOut(auth) })
+    ),
+    el('p', { class: 'quelle' }, el('a', { href: 'https://blsdb.de/', target: '_blank', rel: 'noopener', text: QUELLE_BLS }))
+  ));
+  if (istBesitzer) baueZugaenge();
+}
+
 // ---------- Navigation ----------
 
 async function route() {
@@ -870,6 +1042,7 @@ async function route() {
     if (teile[0] === 'variante') return ansichtVarianteAnlegen(id);
     return ansichtBearbeiten(id);
   }
+  if (teile[0] === 'einstellungen') return ansichtEinstellungen();
   if (teile[0] === 'neu') {
     try { await ladeRezepte(); } catch (f) { console.error(f); }
     return ansichtBearbeiten('');

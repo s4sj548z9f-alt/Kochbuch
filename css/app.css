@@ -22,8 +22,9 @@
   color-scheme: light;
 }
 
+/* Dunkel: automatisch nach Geraet, ausser "Hell" ist gewaehlt; oder fest "Dunkel" */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="hell"]) {
     --bg: #161513;
     --surface: #22201D;
     --text: #F2EEE7;
@@ -44,6 +45,26 @@
     color-scheme: dark;
   }
 }
+:root[data-theme="dunkel"] {
+    --bg: #161513;
+    --surface: #22201D;
+    --text: #F2EEE7;
+    --muted: #B8B0A4;
+    --border: #3A3631;
+    --input-border: #4A453F;
+    --accent: #8CCB9A;
+    --accent-hover: #A8DAB3;
+    --on-accent: #10200F;
+    --soft: #1F2E24;
+    --header-bg: #1C2E22;
+    --header-text: #F2EEE7;
+    --header-muted: #B8CDBD;
+    --logo: #8CCB9A;
+    --warn-bg: #3A2E15;
+    --warn-text: #F1D08A;
+    --danger: #FF8A80;
+    color-scheme: dark;
+  }
 
 * { box-sizing: border-box; }
 
@@ -308,3 +329,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 }
 .karte.aktuell { background: var(--soft); border: 1.5px solid var(--accent); justify-content: space-between; }
 .uebernahme { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Einstellungen */
+a.iconknopf { color: var(--text); text-decoration: none; }
+.segment { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--border); border-radius: var(--radius); }
+.segment button { min-height: 46px; border: 0; border-radius: 9px; background: transparent; cursor: pointer; }
+.segment button[aria-pressed="true"] { background: var(--surface); font-weight: 700; box-shadow: 0 1px 3px rgba(31, 29, 26, 0.15); }
+.person { display: flex; align-items: center; gap: 10px; min-height: 60px; border-bottom: 1px solid var(--border); }
+.person:last-child { border-bottom: 0; }
+.person-mail { overflow-wrap: anywhere; }
+.umrechner-zeile input[type="email"] { width: auto; flex: 1; min-width: 0; }
