@@ -299,3 +299,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 }
 .treffer-zeile:last-child { border-bottom: 0; }
 .treffer-zeile .hinweis { flex: none; }
+
+/* Varianten */
+.karte-variante { font-size: 15px; font-weight: 700; color: var(--accent); }
+.badge-variante {
+  flex: none; font-size: 14px; font-weight: 700; color: var(--accent);
+  background: var(--soft); padding: 6px 10px; border-radius: 8px;
+}
+.karte.aktuell { background: var(--soft); border: 1.5px solid var(--accent); justify-content: space-between; }
+.uebernahme { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }

@@ -161,12 +161,19 @@ function nwText(wert, einheit) {
 async function ladeRezepte() {
   if (zustand.rezepte) return zustand.rezepte;
   const snap = await getDocs(collection(db, 'rezepte'));
-  zustand.rezepte = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => vergleich(a.titel || '', b.titel || ''));
+  zustand.rezepte = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  sortiereRezepte();
   return zustand.rezepte;
 }
 function findeRezept(id) {
   return (zustand.rezepte || []).find(r => r.id === id) || null;
+}
+function varianten(originalId) {
+  return (zustand.rezepte || []).filter(r => r.originalId === originalId)
+    .sort((a, b) => vergleich(a.variantenName || '', b.variantenName || ''));
+}
+function sortiereRezepte() {
+  zustand.rezepte.sort((a, b) => vergleich(a.titel || '', b.titel || '') || vergleich(a.variantenName || '', b.variantenName || ''));
 }
 async function pruefeFreigabe(nutzer) {
   try {
@@ -287,11 +294,14 @@ async function ansichtListe() {
     liste.replaceChildren(...treffer.map(r => {
       const info = [r.kategorie, r.zeitMin ? `${r.zeitMin} Min` : '', r.portionen ? `${zahl(r.portionen, 0.5)} Portionen` : '']
         .filter(Boolean).join(' · ');
+      const anzahlVarianten = r.originalId ? 0 : varianten(r.id).length;
       return el('a', { class: 'karte', href: `#/rezept/${encodeURIComponent(r.id)}` },
         el('div', { class: 'karte-text' },
           el('span', { class: 'karte-titel', text: r.titel || 'Ohne Titel' }),
+          r.originalId ? el('span', { class: 'karte-variante', text: `Variante: ${r.variantenName || 'ohne Namen'}` }) : null,
           info ? el('span', { class: 'karte-info', text: info }) : null
         ),
+        anzahlVarianten ? el('span', { class: 'badge-variante', text: anzahlVarianten === 1 ? '1 Variante' : `${anzahlVarianten} Varianten` }) : null,
         icon('weiter')
       );
     }));
@@ -349,6 +359,23 @@ function ansichtRezept(id) {
         ])
       ),
       el('p', { class: 'quelle' }, el('a', { href: 'https://blsdb.de/', target: '_blank', rel: 'noopener', text: QUELLE_BLS }))
+    );
+  }
+
+  function variantenAbschnitt() {
+    const original = r.originalId ? findeRezept(r.originalId) : r;
+    const familie = original ? [original, ...varianten(original.id)] : [r];
+    return el('section', { class: 'abschnitt' },
+      el('h2', { text: 'Varianten' }),
+      el('div', { class: 'liste' }, ...familie.map(x => {
+        const name = x.originalId ? (x.variantenName || 'Variante ohne Namen') : 'Original';
+        return x.id === r.id
+          ? el('div', { class: 'karte aktuell', 'aria-current': 'page' },
+              el('span', { class: 'karte-titel', text: name }), el('span', { class: 'hinweis', text: 'angezeigt' }))
+          : el('a', { class: 'karte', href: `#/rezept/${encodeURIComponent(x.id)}` },
+              el('span', { class: 'karte-text' }, el('span', { class: 'karte-titel', text: name })), icon('weiter'));
+      })),
+      el('a', { class: 'knopf gestrichelt', href: `#/variante/${encodeURIComponent(r.id)}` }, icon('plus'), 'Variante anlegen')
     );
   }
 
@@ -462,7 +489,8 @@ function ansichtRezept(id) {
       r.notizen ? el('section', { class: 'abschnitt' },
         el('h2', { text: 'Notizen' }),
         el('div', { class: 'box notizen', text: r.notizen })
-      ) : null
+      ) : null,
+      variantenAbschnitt()
     ));
     window.scrollTo(0, y);
   }
@@ -488,7 +516,8 @@ function ansichtBearbeiten(id) {
       panel: null
     })),
     schritte: [...(vorhanden?.schritte || [])],
-    notizen: vorhanden?.notizen || ''
+    notizen: vorhanden?.notizen || '',
+    variantenName: vorhanden?.variantenName || ''
   };
   const leereZutat = () => ({ mengeText: '', einheit: '', name: '', grammText: '', panel: null });
   if (e.zutaten.length === 0) e.zutaten.push(leereZutat());
@@ -627,6 +656,7 @@ function ansichtBearbeiten(id) {
         el('strong', { text: vorhanden ? 'Rezept bearbeiten' : 'Neues Rezept' })
       ),
       feld('titel', 'Titel', el('input', { id: 'titel', type: 'text', required: true, value: e.titel, oninput: (ev) => { e.titel = ev.target.value; } })),
+      vorhanden?.originalId ? feld('vname', 'Name der Variante', el('input', { id: 'vname', type: 'text', required: true, value: e.variantenName, oninput: (ev) => { e.variantenName = ev.target.value; } })) : null,
       feld('kat', 'Kategorie', el('input', { id: 'kat', type: 'text', list: 'kategorien', value: e.kategorie, placeholder: 'z. B. Suppen', oninput: (ev) => { e.kategorie = ev.target.value; } })),
       el('datalist', { id: 'kategorien' }, ...kategorien.map(k => el('option', { value: k }))),
       el('div', { class: 'zwei' },
@@ -705,7 +735,7 @@ function ansichtBearbeiten(id) {
       schritte: e.schritte.map(t => t.trim()).filter(Boolean),
       notizen: e.notizen.trim(),
       originalId: vorhanden?.originalId ?? null,
-      variantenName: vorhanden?.variantenName ?? null,
+      variantenName: vorhanden?.originalId ? (e.variantenName.trim() || 'ohne Namen') : null,
       geaendertVon: zustand.nutzer.email,
       geaendertAm: serverTimestamp()
     };
@@ -716,8 +746,8 @@ function ansichtBearbeiten(id) {
       else neueId = (await addDoc(collection(db, 'rezepte'), daten)).id;
 
       const lokal = { id: neueId, ...daten, geaendertAm: new Date() };
-      zustand.rezepte = [...(zustand.rezepte || []).filter(r => r.id !== neueId), lokal]
-        .sort((a, b) => vergleich(a.titel || '', b.titel || ''));
+      zustand.rezepte = [...(zustand.rezepte || []).filter(r => r.id !== neueId), lokal];
+      sortiereRezepte();
       location.hash = `#/rezept/${encodeURIComponent(neueId)}`;
     } catch (f) {
       console.error(f);
@@ -726,10 +756,25 @@ function ansichtBearbeiten(id) {
   }
 
   async function loeschen() {
-    if (!confirm(`„${vorhanden.titel}“ wirklich löschen? Das lässt sich nicht rückgängig machen.`)) return;
+    const abhaengig = vorhanden.originalId ? [] : varianten(vorhanden.id);
+    const name = vorhanden.originalId ? `${vorhanden.titel} – ${vorhanden.variantenName}` : vorhanden.titel;
+    const zusatz = abhaengig.length
+      ? (abhaengig.length === 1
+          ? ' Die Variante bleibt als eigenes Rezept erhalten.'
+          : ` Die ${abhaengig.length} Varianten bleiben als eigene Rezepte erhalten.`)
+      : '';
+    if (!confirm(`„${name}“ wirklich löschen? Das lässt sich nicht rückgängig machen.${zusatz}`)) return;
     try {
+      // Varianten werden zu eigenstaendigen Rezepten, damit sie nicht auf ein geloeschtes Original zeigen.
+      for (const v of abhaengig) {
+        await updateDoc(doc(db, 'rezepte', v.id), { originalId: null, titel: `${v.titel} – ${v.variantenName || 'Variante'}`, variantenName: null });
+        v.titel = `${v.titel} – ${v.variantenName || 'Variante'}`;
+        v.originalId = null;
+        v.variantenName = null;
+      }
       await deleteDoc(doc(db, 'rezepte', vorhanden.id));
       zustand.rezepte = (zustand.rezepte || []).filter(r => r.id !== vorhanden.id);
+      sortiereRezepte();
       location.hash = '#/';
     } catch (f) {
       console.error(f);
@@ -739,6 +784,71 @@ function ansichtBearbeiten(id) {
 
   window.scrollTo(0, 0);
   neuZeichnen();
+}
+
+function ansichtVarianteAnlegen(id) {
+  const quelle = findeRezept(id);
+  if (!quelle) { location.hash = '#/'; return; }
+  const originalId = quelle.originalId || quelle.id;
+  const meldung = el('p', { class: 'fehler', role: 'alert' });
+  const name = el('input', { id: 'vname', type: 'text', required: true, placeholder: 'z. B. ohne Zucker' });
+  const vorschau = el('p', { class: 'hinweis', text: `Wird angezeigt als: ${quelle.titel} – …` });
+  name.addEventListener('input', () => { vorschau.textContent = `Wird angezeigt als: ${quelle.titel} – ${name.value.trim() || '…'}`; });
+  const basisName = quelle.originalId ? `${quelle.titel} (Variante „${quelle.variantenName || 'ohne Namen'}“)` : `${quelle.titel} (Original)`;
+
+  async function anlegen(ev) {
+    ev.preventDefault();
+    const vname = name.value.trim();
+    if (!vname) { meldung.textContent = 'Bitte einen Namen für die Variante eingeben.'; return; }
+    const daten = {
+      titel: quelle.titel || '',
+      kategorie: quelle.kategorie || '',
+      portionen: quelle.portionen || 1,
+      zeitMin: quelle.zeitMin ?? null,
+      zutaten: (quelle.zutaten || []).map(z => ({ ...z })),
+      schritte: [...(quelle.schritte || [])],
+      notizen: quelle.notizen || '',
+      originalId,
+      variantenName: vname,
+      geaendertVon: zustand.nutzer.email,
+      geaendertAm: serverTimestamp()
+    };
+    try {
+      const neu = await addDoc(collection(db, 'rezepte'), daten);
+      zustand.rezepte.push({ id: neu.id, ...daten, geaendertAm: new Date() });
+      sortiereRezepte();
+      location.hash = `#/bearbeiten/${encodeURIComponent(neu.id)}`;
+    } catch (f) {
+      console.error(f);
+      meldung.textContent = 'Anlegen fehlgeschlagen. Bitte Internetverbindung prüfen.';
+    }
+  }
+
+  zeige(el('form', { class: 'seite', onsubmit: anlegen },
+    el('div', { class: 'leiste' },
+      el('a', { class: 'zurueck', href: `#/rezept/${encodeURIComponent(quelle.id)}`, text: 'Abbrechen' })
+    ),
+    el('div', { class: 'abschnitt' },
+      el('h1', { text: 'Variante anlegen' }),
+      el('p', { class: 'hinweis', text: 'Die Variante ist eine Kopie, die du danach anpassen kannst. Das Original bleibt unverändert.' })
+    ),
+    el('div', { class: 'box' },
+      el('div', { class: 'hinweis', text: 'Basiert auf' }),
+      el('strong', { text: basisName })
+    ),
+    el('div', { class: 'feld' }, el('label', { for: 'vname', text: 'Name der Variante' }), name, vorschau),
+    el('div', { class: 'abschnitt' },
+      el('span', { class: 'label', text: 'Wird übernommen' }),
+      el('ul', { class: 'uebernahme' },
+        el('li', { text: `${(quelle.zutaten || []).length} Zutaten mit Nährwerten` }),
+        el('li', { text: `${(quelle.schritte || []).length} Zubereitungsschritte` }),
+        el('li', { text: 'Portionen, Zeit, Kategorie, Notizen' })
+      )
+    ),
+    meldung,
+    el('button', { class: 'knopf haupt', type: 'submit', text: 'Anlegen und bearbeiten' })
+  ));
+  setTimeout(() => name.focus(), 0);
 }
 
 // ---------- Navigation ----------
@@ -751,12 +861,14 @@ async function route() {
   const teile = location.hash.replace(/^#\/?/, '').split('/');
   const id = teile[1] ? decodeURIComponent(teile[1]) : '';
 
-  if (teile[0] === 'rezept' || teile[0] === 'bearbeiten') {
+  if (teile[0] === 'rezept' || teile[0] === 'bearbeiten' || teile[0] === 'variante') {
     try { await ladeRezepte(); } catch (f) {
       console.error(f);
       return ansichtFehler('Die Rezepte konnten nicht geladen werden. Bitte Internetverbindung prüfen.');
     }
-    return teile[0] === 'rezept' ? ansichtRezept(id) : ansichtBearbeiten(id);
+    if (teile[0] === 'rezept') return ansichtRezept(id);
+    if (teile[0] === 'variante') return ansichtVarianteAnlegen(id);
+    return ansichtBearbeiten(id);
   }
   if (teile[0] === 'neu') {
     try { await ladeRezepte(); } catch (f) { console.error(f); }
